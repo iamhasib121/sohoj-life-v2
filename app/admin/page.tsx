@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
+
 import {
   addDoc,
   collection,
@@ -12,12 +14,14 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
+
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
   type User,
 } from "firebase/auth";
+
 import {
   LayoutDashboard,
   Package,
@@ -30,15 +34,23 @@ import {
   X,
   RefreshCw,
   AlertCircle,
-  CheckCircle2,
   Loader2,
 } from "lucide-react";
 
 import { auth, db } from "@/lib/firebase";
 
-const ADMIN_EMAIL = (
-  process.env.NEXT_PUBLIC_ADMIN_EMAIL || ""
-).trim().toLowerCase();
+// =====================================================
+// ADMIN EMAILS
+// .env.local:
+// NEXT_PUBLIC_ADMIN_EMAILS=shefatkhn@gmail.com,iamhasib121@gmail.com
+// =====================================================
+
+const ADMIN_EMAILS = (
+  process.env.NEXT_PUBLIC_ADMIN_EMAILS || ""
+)
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
 
 type Tab = "dashboard" | "products" | "orders";
 
@@ -134,43 +146,58 @@ export default function AdminPage() {
 
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [productForm, setProductForm] = useState<ProductForm>(emptyProduct);
+  const [productForm, setProductForm] =
+    useState<ProductForm>(emptyProduct);
   const [productSaving, setProductSaving] = useState(false);
   const [productError, setProductError] = useState("");
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  /*
-   * Firebase Auth listener
-   */
+  // =====================================================
+  // Firebase Auth listener
+  // =====================================================
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (!currentUser) {
-        setUser(null);
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (currentUser) => {
+        if (!currentUser) {
+          setUser(null);
+          setAuthLoading(false);
+          return;
+        }
+
+        const currentEmail = (currentUser.email || "")
+          .trim()
+          .toLowerCase();
+
+        // Admin email check
+        if (
+          ADMIN_EMAILS.length > 0 &&
+          !ADMIN_EMAILS.includes(currentEmail)
+        ) {
+          await signOut(auth);
+
+          setUser(null);
+          setLoginError(
+            "এই account-এর Admin access নেই।"
+          );
+          setAuthLoading(false);
+          return;
+        }
+
+        setUser(currentUser);
         setAuthLoading(false);
-        return;
       }
-
-      const currentEmail = (currentUser.email || "").trim().toLowerCase();
-
-      if (ADMIN_EMAIL && currentEmail !== ADMIN_EMAIL) {
-        await signOut(auth);
-        setUser(null);
-        setLoginError("এই account-এর Admin access নেই।");
-        setAuthLoading(false);
-        return;
-      }
-
-      setUser(currentUser);
-      setAuthLoading(false);
-    });
+    );
 
     return () => unsubscribe();
   }, []);
 
-  /*
-   * Products listener
-   */
+  // =====================================================
+  // Products listener
+  // =====================================================
+
   useEffect(() => {
     if (!user) return;
 
@@ -199,9 +226,10 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, [user]);
 
-  /*
-   * Orders listener
-   */
+  // =====================================================
+  // Orders listener
+  // =====================================================
+
   useEffect(() => {
     if (!user) return;
 
@@ -228,9 +256,10 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, [user]);
 
-  /*
-   * Login
-   */
+  // =====================================================
+  // Login
+  // =====================================================
+
   const login = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -259,11 +288,14 @@ export default function AdminPage() {
 
       const authenticatedEmail = (
         result.user.email || ""
-      ).trim().toLowerCase();
+      )
+        .trim()
+        .toLowerCase();
 
+      // Check admin access
       if (
-        ADMIN_EMAIL &&
-        authenticatedEmail !== ADMIN_EMAIL
+        ADMIN_EMAILS.length > 0 &&
+        !ADMIN_EMAILS.includes(authenticatedEmail)
       ) {
         await signOut(auth);
 
@@ -281,9 +313,10 @@ export default function AdminPage() {
     }
   };
 
-  /*
-   * Logout
-   */
+  // =====================================================
+  // Logout
+  // =====================================================
+
   const logout = async () => {
     try {
       await signOut(auth);
@@ -293,9 +326,10 @@ export default function AdminPage() {
     }
   };
 
-  /*
-   * Open add product form
-   */
+  // =====================================================
+  // Open add product form
+  // =====================================================
+
   const openAddProduct = () => {
     setEditingProduct(null);
     setProductForm(emptyProduct);
@@ -303,11 +337,13 @@ export default function AdminPage() {
     setShowProductForm(true);
   };
 
-  /*
-   * Open edit product form
-   */
+  // =====================================================
+  // Open edit product form
+  // =====================================================
+
   const openEditProduct = (product: Product) => {
     setEditingProduct(product);
+
     setProductForm({
       name: product.name || "",
       price: String(product.price ?? ""),
@@ -321,10 +357,13 @@ export default function AdminPage() {
     setShowProductForm(true);
   };
 
-  /*
-   * Save product
-   */
-  const saveProduct = async (e: FormEvent<HTMLFormElement>) => {
+  // =====================================================
+  // Save product
+  // =====================================================
+
+  const saveProduct = async (
+    e: FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
 
     setProductError("");
@@ -338,7 +377,11 @@ export default function AdminPage() {
       return;
     }
 
-    if (!productForm.price || Number.isNaN(price) || price < 0) {
+    if (
+      !productForm.price ||
+      Number.isNaN(price) ||
+      price < 0
+    ) {
       setProductError("Valid price দিন।");
       return;
     }
@@ -381,6 +424,7 @@ export default function AdminPage() {
       setProductForm(emptyProduct);
     } catch (error: any) {
       console.error("Save product error:", error);
+
       setProductError(
         error?.message || "Product save করা যায়নি।"
       );
@@ -389,9 +433,10 @@ export default function AdminPage() {
     }
   };
 
-  /*
-   * Delete product
-   */
+  // =====================================================
+  // Delete product
+  // =====================================================
+
   const deleteProduct = async (product: Product) => {
     const confirmed = window.confirm(
       `"${product.name}" delete করতে চান?`
@@ -402,7 +447,9 @@ export default function AdminPage() {
     setActionLoading(product.id);
 
     try {
-      await deleteDoc(doc(db, "products", product.id));
+      await deleteDoc(
+        doc(db, "products", product.id)
+      );
     } catch (error) {
       console.error("Delete product error:", error);
       alert("Product delete করা যায়নি।");
@@ -411,9 +458,10 @@ export default function AdminPage() {
     }
   };
 
-  /*
-   * Update order status
-   */
+  // =====================================================
+  // Update order status
+  // =====================================================
+
   const updateOrderStatus = async (
     orderId: string,
     status: string
@@ -421,21 +469,29 @@ export default function AdminPage() {
     setActionLoading(orderId);
 
     try {
-      await updateDoc(doc(db, "orders", orderId), {
-        status,
-        updatedAt: serverTimestamp(),
-      });
+      await updateDoc(
+        doc(db, "orders", orderId),
+        {
+          status,
+          updatedAt: serverTimestamp(),
+        }
+      );
     } catch (error) {
-      console.error("Order status update error:", error);
+      console.error(
+        "Order status update error:",
+        error
+      );
+
       alert("Order status update করা যায়নি।");
     } finally {
       setActionLoading(null);
     }
   };
 
-  /*
-   * Dashboard stats
-   */
+  // =====================================================
+  // Dashboard stats
+  // =====================================================
+
   const stats = useMemo(() => {
     const totalProducts = products.length;
 
@@ -443,11 +499,13 @@ export default function AdminPage() {
 
     const pendingOrders = orders.filter(
       (order) =>
-        (order.status || "pending").toLowerCase() === "pending"
+        (order.status || "pending").toLowerCase() ===
+        "pending"
     ).length;
 
     const totalSales = orders.reduce(
-      (sum, order) => sum + Number(order.total || 0),
+      (sum, order) =>
+        sum + Number(order.total || 0),
       0
     );
 
@@ -459,15 +517,20 @@ export default function AdminPage() {
     };
   }, [products, orders]);
 
-  /*
-   * Format date
-   */
+  // =====================================================
+  // Format date
+  // =====================================================
+
   const formatDate = (value: any) => {
     if (!value) return "—";
 
     try {
-      if (typeof value?.toDate === "function") {
-        return value.toDate().toLocaleString("en-BD");
+      if (
+        typeof value?.toDate === "function"
+      ) {
+        return value
+          .toDate()
+          .toLocaleString("en-BD");
       }
 
       return new Date(value).toLocaleString("en-BD");
@@ -476,9 +539,10 @@ export default function AdminPage() {
     }
   };
 
-  /*
-   * Loading screen
-   */
+  // =====================================================
+  // Loading screen
+  // =====================================================
+
   if (authLoading) {
     return (
       <main className="min-h-screen bg-slate-100 flex items-center justify-center">
@@ -490,9 +554,10 @@ export default function AdminPage() {
     );
   }
 
-  /*
-   * Login screen
-   */
+  // =====================================================
+  // Login screen
+  // =====================================================
+
   if (!user) {
     return (
       <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
@@ -519,7 +584,10 @@ export default function AdminPage() {
               </div>
             )}
 
-            <form onSubmit={login} className="space-y-4">
+            <form
+              onSubmit={login}
+              className="space-y-4"
+            >
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-2">
                   Email
@@ -528,7 +596,9 @@ export default function AdminPage() {
                 <input
                   type="email"
                   value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
+                  onChange={(e) =>
+                    setLoginEmail(e.target.value)
+                  }
                   placeholder="admin@example.com"
                   autoComplete="email"
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
@@ -543,7 +613,9 @@ export default function AdminPage() {
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) =>
+                    setPassword(e.target.value)
+                  }
                   placeholder="••••••••"
                   autoComplete="current-password"
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
@@ -566,9 +638,17 @@ export default function AdminPage() {
               </button>
             </form>
 
-            {ADMIN_EMAIL && (
+            {/* Back to Home */}
+            <Link
+              href="/"
+              className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950"
+            >
+              ← Back to Home
+            </Link>
+
+            {ADMIN_EMAILS.length > 0 && (
               <p className="text-xs text-slate-400 text-center mt-5">
-                Admin: {ADMIN_EMAIL}
+                Admin accounts: {ADMIN_EMAILS.join(", ")}
               </p>
             )}
           </div>
@@ -577,14 +657,17 @@ export default function AdminPage() {
     );
   }
 
-  /*
-   * Admin dashboard
-   */
+  // =====================================================
+  // Admin Dashboard
+  // =====================================================
+
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900">
+
       {/* Header */}
       <header className="bg-slate-950 text-white sticky top-0 z-40 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
+
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center">
               <LayoutDashboard className="w-6 h-6" />
@@ -612,6 +695,7 @@ export default function AdminPage() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-7">
+
         {/* Tabs */}
         <div className="flex gap-2 overflow-x-auto mb-6">
           {(
@@ -639,12 +723,14 @@ export default function AdminPage() {
         {tab === "dashboard" && (
           <section>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
               <div className="bg-white rounded-2xl border border-slate-200 p-5">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-slate-500">
                       Products
                     </p>
+
                     <p className="text-3xl font-black mt-1">
                       {stats.totalProducts}
                     </p>
@@ -662,6 +748,7 @@ export default function AdminPage() {
                     <p className="text-sm text-slate-500">
                       Orders
                     </p>
+
                     <p className="text-3xl font-black mt-1">
                       {stats.totalOrders}
                     </p>
@@ -679,6 +766,7 @@ export default function AdminPage() {
                     <p className="text-sm text-slate-500">
                       Pending
                     </p>
+
                     <p className="text-3xl font-black mt-1">
                       {stats.pendingOrders}
                     </p>
@@ -698,7 +786,10 @@ export default function AdminPage() {
                     </p>
 
                     <p className="text-3xl font-black mt-1">
-                      ৳{stats.totalSales.toLocaleString("en-BD")}
+                      ৳
+                      {stats.totalSales.toLocaleString(
+                        "en-BD"
+                      )}
                     </p>
                   </div>
 
@@ -976,7 +1067,9 @@ export default function AdminPage() {
 
                             <p>
                               <strong>Date:</strong>{" "}
-                              {formatDate(order.createdAt)}
+                              {formatDate(
+                                order.createdAt
+                              )}
                             </p>
                           </div>
                         </div>
@@ -1042,7 +1135,10 @@ export default function AdminPage() {
 
                             <div className="space-y-2">
                               {order.items.map(
-                                (item: any, index: number) => (
+                                (
+                                  item: any,
+                                  index: number
+                                ) => (
                                   <div
                                     key={`${order.id}-${index}`}
                                     className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 text-sm"
@@ -1066,7 +1162,9 @@ export default function AdminPage() {
                                       ৳
                                       {Number(
                                         item.price || 0
-                                      ).toLocaleString("en-BD")}
+                                      ).toLocaleString(
+                                        "en-BD"
+                                      )}
                                     </p>
                                   </div>
                                 )
@@ -1087,6 +1185,7 @@ export default function AdminPage() {
       {showProductForm && (
         <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
           <div className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl">
+
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-black">
