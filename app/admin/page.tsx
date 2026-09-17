@@ -72,7 +72,9 @@ type Order = {
   phone?: string;
   address?: string;
   total?: number;
+  totalAmount?: number;
   status?: string;
+  payment?: string;
   items?: any[];
   createdAt?: any;
 };
@@ -146,8 +148,10 @@ export default function AdminPage() {
 
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
   const [productForm, setProductForm] =
     useState<ProductForm>(emptyProduct);
+
   const [productSaving, setProductSaving] = useState(false);
   const [productError, setProductError] = useState("");
 
@@ -171,7 +175,6 @@ export default function AdminPage() {
           .trim()
           .toLowerCase();
 
-        // Admin email check
         if (
           ADMIN_EMAILS.length > 0 &&
           !ADMIN_EMAILS.includes(currentEmail)
@@ -182,6 +185,7 @@ export default function AdminPage() {
           setLoginError(
             "এই account-এর Admin access নেই।"
           );
+
           setAuthLoading(false);
           return;
         }
@@ -292,7 +296,6 @@ export default function AdminPage() {
         .trim()
         .toLowerCase();
 
-      // Check admin access
       if (
         ADMIN_EMAILS.length > 0 &&
         !ADMIN_EMAILS.includes(authenticatedEmail)
@@ -469,8 +472,18 @@ export default function AdminPage() {
     setActionLoading(orderId);
 
     try {
+      // Update main order
       await updateDoc(
         doc(db, "orders", orderId),
+        {
+          status,
+          updatedAt: serverTimestamp(),
+        }
+      );
+
+      // Update customer tracking
+      await updateDoc(
+        doc(db, "orderTracking", orderId),
         {
           status,
           updatedAt: serverTimestamp(),
@@ -505,7 +518,12 @@ export default function AdminPage() {
 
     const totalSales = orders.reduce(
       (sum, order) =>
-        sum + Number(order.total || 0),
+        sum +
+        Number(
+          order.totalAmount ??
+            order.total ??
+            0
+        ),
       0
     );
 
@@ -563,6 +581,7 @@ export default function AdminPage() {
       <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
         <div className="w-full max-w-md">
           <div className="bg-white rounded-3xl shadow-xl border border-slate-200 p-7">
+
             <div className="text-center mb-7">
               <div className="w-16 h-16 rounded-2xl bg-slate-950 text-amber-400 flex items-center justify-center mx-auto mb-4">
                 <LayoutDashboard className="w-8 h-8" />
@@ -638,7 +657,6 @@ export default function AdminPage() {
               </button>
             </form>
 
-            {/* Back to Home */}
             <Link
               href="/"
               className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950"
@@ -722,6 +740,7 @@ export default function AdminPage() {
         {/* Dashboard */}
         {tab === "dashboard" && (
           <section>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
               <div className="bg-white rounded-2xl border border-slate-200 p-5">
@@ -817,6 +836,7 @@ export default function AdminPage() {
         {/* Products */}
         {tab === "products" && (
           <section>
+
             <div className="flex items-center justify-between gap-4 mb-5">
               <div>
                 <h2 className="text-2xl font-black">
@@ -843,6 +863,7 @@ export default function AdminPage() {
               </div>
             ) : products.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+
                 <Package className="w-10 h-10 mx-auto text-slate-300 mb-3" />
 
                 <p className="font-bold text-slate-700">
@@ -855,10 +876,13 @@ export default function AdminPage() {
               </div>
             ) : (
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[800px]">
+
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
+
                         <th className="text-left px-5 py-4 text-sm font-black">
                           Product
                         </th>
@@ -878,17 +902,21 @@ export default function AdminPage() {
                         <th className="text-right px-5 py-4 text-sm font-black">
                           Actions
                         </th>
+
                       </tr>
                     </thead>
 
                     <tbody>
+
                       {products.map((product) => (
                         <tr
                           key={product.id}
                           className="border-b border-slate-100 last:border-b-0"
                         >
+
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
+
                               {product.image ? (
                                 <img
                                   src={product.image}
@@ -912,6 +940,7 @@ export default function AdminPage() {
                                   </p>
                                 )}
                               </div>
+
                             </div>
                           </td>
 
@@ -927,6 +956,7 @@ export default function AdminPage() {
                           </td>
 
                           <td className="px-5 py-4">
+
                             <span
                               className={`inline-flex px-3 py-1 rounded-full text-xs font-bold ${
                                 Number(product.stock || 0) > 0
@@ -936,10 +966,13 @@ export default function AdminPage() {
                             >
                               {product.stock ?? 0}
                             </span>
+
                           </td>
 
                           <td className="px-5 py-4">
+
                             <div className="flex justify-end gap-2">
+
                               <button
                                 onClick={() =>
                                   openEditProduct(product)
@@ -966,10 +999,14 @@ export default function AdminPage() {
                                   <Trash2 className="w-4 h-4" />
                                 )}
                               </button>
+
                             </div>
+
                           </td>
+
                         </tr>
                       ))}
+
                     </tbody>
                   </table>
                 </div>
@@ -981,6 +1018,7 @@ export default function AdminPage() {
         {/* Orders */}
         {tab === "orders" && (
           <section>
+
             <div className="mb-5">
               <h2 className="text-2xl font-black">
                 Orders
@@ -993,26 +1031,38 @@ export default function AdminPage() {
 
             {orders.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+
                 <ShoppingBag className="w-10 h-10 mx-auto text-slate-300 mb-3" />
 
                 <p className="font-bold text-slate-700">
                   কোনো order পাওয়া যায়নি।
                 </p>
+
               </div>
             ) : (
               <div className="space-y-4">
+
                 {orders.map((order) => {
                   const currentStatus =
                     order.status || "pending";
+
+                  const orderTotal =
+                    order.totalAmount ??
+                    order.total ??
+                    0;
 
                   return (
                     <div
                       key={order.id}
                       className="bg-white rounded-2xl border border-slate-200 p-5"
                     >
+
                       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+
                         <div>
+
                           <div className="flex flex-wrap items-center gap-3">
+
                             <h3 className="font-black text-lg">
                               Order #{order.id.slice(0, 8)}
                             </h3>
@@ -1023,6 +1073,8 @@ export default function AdminPage() {
                                   ? "bg-amber-50 text-amber-700"
                                   : currentStatus === "confirmed"
                                   ? "bg-blue-50 text-blue-700"
+                                  : currentStatus === "processing"
+                                  ? "bg-indigo-50 text-indigo-700"
                                   : currentStatus === "shipped"
                                   ? "bg-purple-50 text-purple-700"
                                   : currentStatus === "delivered"
@@ -1034,9 +1086,11 @@ export default function AdminPage() {
                             >
                               {currentStatus}
                             </span>
+
                           </div>
 
                           <div className="mt-4 space-y-1 text-sm text-slate-600">
+
                             {order.customerName && (
                               <p>
                                 <strong>Name:</strong>{" "}
@@ -1065,16 +1119,25 @@ export default function AdminPage() {
                               </p>
                             )}
 
+                            {order.payment && (
+                              <p>
+                                <strong>Payment:</strong>{" "}
+                                {order.payment}
+                              </p>
+                            )}
+
                             <p>
                               <strong>Date:</strong>{" "}
                               {formatDate(
                                 order.createdAt
                               )}
                             </p>
+
                           </div>
                         </div>
 
                         <div className="lg:text-right">
+
                           <p className="text-sm text-slate-500">
                             Total
                           </p>
@@ -1082,7 +1145,7 @@ export default function AdminPage() {
                           <p className="text-2xl font-black">
                             ৳
                             {Number(
-                              order.total || 0
+                              orderTotal
                             ).toLocaleString("en-BD")}
                           </p>
 
@@ -1099,6 +1162,7 @@ export default function AdminPage() {
                             }
                             className="mt-3 border border-slate-300 rounded-xl px-3 py-2 text-sm font-semibold outline-none"
                           >
+
                             <option value="pending">
                               Pending
                             </option>
@@ -1122,18 +1186,23 @@ export default function AdminPage() {
                             <option value="cancelled">
                               Cancelled
                             </option>
+
                           </select>
+
                         </div>
+
                       </div>
 
                       {Array.isArray(order.items) &&
                         order.items.length > 0 && (
                           <div className="mt-5 pt-5 border-t border-slate-100">
+
                             <h4 className="font-bold mb-3">
                               Items
                             </h4>
 
                             <div className="space-y-2">
+
                               {order.items.map(
                                 (
                                   item: any,
@@ -1143,7 +1212,9 @@ export default function AdminPage() {
                                     key={`${order.id}-${index}`}
                                     className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 text-sm"
                                   >
+
                                     <div>
+
                                       <p className="font-semibold">
                                         {item.name ||
                                           item.title ||
@@ -1156,6 +1227,7 @@ export default function AdminPage() {
                                           item.qty ||
                                           1}
                                       </p>
+
                                     </div>
 
                                     <p className="font-bold">
@@ -1166,28 +1238,37 @@ export default function AdminPage() {
                                         "en-BD"
                                       )}
                                     </p>
+
                                   </div>
                                 )
                               )}
+
                             </div>
                           </div>
                         )}
+
                     </div>
                   );
                 })}
+
               </div>
             )}
+
           </section>
         )}
+
       </div>
 
       {/* Product Modal */}
       {showProductForm && (
         <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+
           <div className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl">
 
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+
               <div>
+
                 <h2 className="text-xl font-black">
                   {editingProduct
                     ? "Edit Product"
@@ -1197,6 +1278,7 @@ export default function AdminPage() {
                 <p className="text-xs text-slate-500 mt-1">
                   Product information দিন।
                 </p>
+
               </div>
 
               <button
@@ -1209,20 +1291,26 @@ export default function AdminPage() {
               >
                 <X className="w-5 h-5" />
               </button>
+
             </div>
 
             <form
               onSubmit={saveProduct}
               className="p-6 space-y-5"
             >
+
               {productError && (
                 <div className="rounded-2xl bg-red-50 border border-red-200 text-red-700 px-4 py-3 flex gap-3 text-sm">
+
                   <AlertCircle className="w-5 h-5 shrink-0" />
+
                   <span>{productError}</span>
+
                 </div>
               )}
 
               <div>
+
                 <label className="block text-sm font-bold mb-2">
                   Product Name *
                 </label>
@@ -1238,10 +1326,13 @@ export default function AdminPage() {
                   placeholder="Product name"
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
                 />
+
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
                 <div>
+
                   <label className="block text-sm font-bold mb-2">
                     Price *
                   </label>
@@ -1259,9 +1350,11 @@ export default function AdminPage() {
                     placeholder="0"
                     className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
                   />
+
                 </div>
 
                 <div>
+
                   <label className="block text-sm font-bold mb-2">
                     Stock
                   </label>
@@ -1279,10 +1372,13 @@ export default function AdminPage() {
                     placeholder="0"
                     className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
                   />
+
                 </div>
+
               </div>
 
               <div>
+
                 <label className="block text-sm font-bold mb-2">
                   Category
                 </label>
@@ -1298,9 +1394,11 @@ export default function AdminPage() {
                   placeholder="Category"
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
                 />
+
               </div>
 
               <div>
+
                 <label className="block text-sm font-bold mb-2">
                   Image URL
                 </label>
@@ -1317,9 +1415,11 @@ export default function AdminPage() {
                   placeholder="https://..."
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
                 />
+
               </div>
 
               <div>
+
                 <label className="block text-sm font-bold mb-2">
                   Description
                 </label>
@@ -1336,9 +1436,11 @@ export default function AdminPage() {
                   rows={4}
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950 resize-none"
                 />
+
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
+
                 <button
                   type="button"
                   onClick={() => {
@@ -1356,6 +1458,7 @@ export default function AdminPage() {
                   disabled={productSaving}
                   className="px-5 py-3 rounded-xl bg-slate-950 text-white font-bold flex items-center gap-2 disabled:opacity-60"
                 >
+
                   {productSaving ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
@@ -1369,8 +1472,11 @@ export default function AdminPage() {
                         : "Save Product"}
                     </>
                   )}
+
                 </button>
+
               </div>
+
             </form>
           </div>
         </div>
