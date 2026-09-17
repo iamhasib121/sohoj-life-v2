@@ -1,185 +1,245 @@
-```tsx
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
-  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
-  setDoc,
   updateDoc,
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
+  type User,
 } from "firebase/auth";
 import {
-  ArrowLeft,
-  BarChart3,
-  Box,
-  Edit3,
-  LogOut,
+  LayoutDashboard,
   Package,
-  RefreshCw,
+  ShoppingBag,
+  LogOut,
+  Plus,
   Trash2,
-  Truck,
+  Edit3,
+  Save,
+  X,
+  RefreshCw,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
-import { auth, db } from "../firebase";
-import { uploadDemoProducts } from "../seed";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
 
-interface Product {
+import { auth, db } from "@/lib/firebase";
+
+const ADMIN_EMAIL = (
+  process.env.NEXT_PUBLIC_ADMIN_EMAIL || ""
+).trim().toLowerCase();
+
+type Tab = "dashboard" | "products" | "orders";
+
+type Product = {
   id: string;
   name: string;
-  category?: string;
   price: number;
-  oldPrice?: number;
-  stock?: number;
-  image: string;
-  rating?: number;
+  image?: string;
+  category?: string;
   description?: string;
-  featured?: boolean;
-  bestSeller?: boolean;
-  newArrival?: boolean;
-}
+  stock?: number;
+  createdAt?: any;
+};
 
-interface Order {
+type Order = {
   id: string;
   customerName?: string;
+  customerEmail?: string;
   phone?: string;
   address?: string;
-  itemsSummary?: string;
-  totalAmount?: number;
+  total?: number;
   status?: string;
-  payment?: string;
+  items?: any[];
+  createdAt?: any;
+};
+
+type ProductForm = {
+  name: string;
+  price: string;
+  image: string;
+  category: string;
+  description: string;
+  stock: string;
+};
+
+const emptyProduct: ProductForm = {
+  name: "",
+  price: "",
+  image: "",
+  category: "",
+  description: "",
+  stock: "0",
+};
+
+function getFirebaseErrorMessage(error: any) {
+  const code = error?.code || "";
+
+  switch (code) {
+    case "auth/invalid-credential":
+      return "Email অথবা password ভুল। Firebase Authentication-এ এই account এবং password ঠিক আছে কিনা যাচাই করুন।";
+
+    case "auth/wrong-password":
+      return "Password ভুল। আবার চেষ্টা করুন।";
+
+    case "auth/user-not-found":
+      return "এই email দিয়ে কোনো Firebase account পাওয়া যায়নি।";
+
+    case "auth/invalid-email":
+      return "Email address সঠিক নয়।";
+
+    case "auth/too-many-requests":
+      return "অনেকবার login চেষ্টা করা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।";
+
+    case "auth/user-disabled":
+      return "এই Firebase account disabled করা হয়েছে।";
+
+    case "auth/network-request-failed":
+      return "Network সমস্যা হয়েছে। Internet connection চেক করুন।";
+
+    case "auth/operation-not-allowed":
+      return "Firebase Authentication-এ Email/Password sign-in enabled নেই।";
+
+    default:
+      return error?.message || "Login failed। আবার চেষ্টা করুন।";
+  }
 }
 
-const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "")
-  .trim()
-  .toLowerCase();
-
 export default function AdminPage() {
-  const router = useRouter();
-
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [loginEmail, setLoginEmail] = useState("");
   const [password, setPassword] = useState("");
-
+  const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
-  const [loading, setLoading] = useState(true);
 
-  const [tab, setTab] = useState<"dashboard" | "products" | "orders">(
-    "dashboard"
-  );
+  const [tab, setTab] = useState<Tab>("dashboard");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
 
-  const [saving, setSaving] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [dataLoading, setDataLoading] = useState(true);
 
-  const [form, setForm] = useState({
-    name: "",
-    category: "Men's Wear",
-    price: "",
-    oldPrice: "",
-    stock: "10",
-    image: "",
-    description: "",
-    featured: false,
-    bestSeller: false,
-    newArrival: true,
-  });
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productForm, setProductForm] = useState<ProductForm>(emptyProduct);
+  const [productSaving, setProductSaving] = useState(false);
+  const [productError, setProductError] = useState("");
 
-  // =========================
-  // LOAD PRODUCTS + ORDERS
-  // =========================
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const loadData = async () => {
-    try {
-      const [pSnap, oSnap] = await Promise.all([
-        getDocs(collection(db, "products")),
-        getDocs(collection(db, "orders")),
-      ]);
-
-      setProducts(
-        pSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Product[]
-      );
-
-      setOrders(
-        oSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Order[]
-      );
-    } catch (error) {
-      console.error("Load data error:", error);
-    }
-  };
-
-  // =========================
-  // AUTH STATE
-  // =========================
-
+  /*
+   * Firebase Auth listener
+   */
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (current) => {
-      if (!current) {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) {
         setUser(null);
-        setLoading(false);
+        setAuthLoading(false);
         return;
       }
 
-      const email = (current.email || "").trim().toLowerCase();
+      const currentEmail = (currentUser.email || "").trim().toLowerCase();
 
-      // Admin email check
-      if (ADMIN_EMAIL && email !== ADMIN_EMAIL) {
+      if (ADMIN_EMAIL && currentEmail !== ADMIN_EMAIL) {
         await signOut(auth);
-
         setUser(null);
         setLoginError("এই account-এর Admin access নেই।");
-        setLoading(false);
-
+        setAuthLoading(false);
         return;
       }
 
-      setUser(current);
-
-      try {
-        await loadData();
-      } catch (error) {
-        console.error("Admin data loading error:", error);
-      }
-
-      setLoading(false);
+      setUser(currentUser);
+      setAuthLoading(false);
     });
 
-    return () => unsub();
+    return () => unsubscribe();
   }, []);
 
-  // =========================
-  // LOGIN
-  // =========================
+  /*
+   * Products listener
+   */
+  useEffect(() => {
+    if (!user) return;
 
-  const login = async (e: FormEvent) => {
+    const productsQuery = query(
+      collection(db, "products"),
+      orderBy("createdAt", "desc")
+    );
+
+    const unsubscribe = onSnapshot(
+      productsQuery,
+      (snapshot) => {
+        const data: Product[] = snapshot.docs.map((item) => ({
+          id: item.id,
+          ...(item.data() as Omit<Product, "id">),
+        }));
+
+        setProducts(data);
+        setDataLoading(false);
+      },
+      (error) => {
+        console.error("Products listener error:", error);
+        setDataLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  /*
+   * Orders listener
+   */
+  useEffect(() => {
+    if (!user) return;
+
+    const ordersQuery = query(
+      collection(db, "orders"),
+      orderBy("createdAt", "desc")
+    );
+
+    const unsubscribe = onSnapshot(
+      ordersQuery,
+      (snapshot) => {
+        const data: Order[] = snapshot.docs.map((item) => ({
+          id: item.id,
+          ...(item.data() as Omit<Order, "id">),
+        }));
+
+        setOrders(data);
+      },
+      (error) => {
+        console.error("Orders listener error:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  /*
+   * Login
+   */
+  const login = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     setLoginError("");
 
     const email = loginEmail.trim().toLowerCase();
 
-    // Basic validation
     if (!email) {
-      setLoginError("Email address দিন।");
+      setLoginError("Email দিন।");
       return;
     }
 
@@ -188,466 +248,372 @@ export default function AdminPage() {
       return;
     }
 
-    try {
-      console.log("Attempting Firebase login:", email);
+    setLoginLoading(true);
 
+    try {
       const result = await signInWithEmailAndPassword(
         auth,
         email,
         password
       );
 
-      const loggedInEmail = (result.user.email || "")
-        .trim()
-        .toLowerCase();
+      const authenticatedEmail = (
+        result.user.email || ""
+      ).trim().toLowerCase();
 
-      console.log("Firebase login successful:", {
-        uid: result.user.uid,
-        email: loggedInEmail,
-      });
-
-      // Admin permission check
-      if (ADMIN_EMAIL && loggedInEmail !== ADMIN_EMAIL) {
+      if (
+        ADMIN_EMAIL &&
+        authenticatedEmail !== ADMIN_EMAIL
+      ) {
         await signOut(auth);
 
-        setLoginError("এই account-এর Admin access নেই।");
+        setLoginError(
+          "Login হয়েছে, কিন্তু এই account-এর Admin access নেই।"
+        );
+
         return;
       }
-
-      // Login successful
-      setLoginError("");
-
     } catch (error: any) {
-      console.error("Firebase Login Error:", {
-        code: error?.code,
-        message: error?.message,
-      });
-
-      switch (error?.code) {
-        case "auth/invalid-credential":
-          setLoginError(
-            "Email অথবা Password ভুল। Firebase Authentication-এ account এবং password যাচাই করুন।"
-          );
-          break;
-
-        case "auth/wrong-password":
-          setLoginError("Password ভুল হয়েছে।");
-          break;
-
-        case "auth/user-not-found":
-          setLoginError(
-            "এই Email দিয়ে কোনো Firebase account পাওয়া যায়নি।"
-          );
-          break;
-
-        case "auth/invalid-email":
-          setLoginError("Email address সঠিক নয়।");
-          break;
-
-        case "auth/too-many-requests":
-          setLoginError(
-            "অনেকবার login চেষ্টা করা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।"
-          );
-          break;
-
-        case "auth/user-disabled":
-          setLoginError(
-            "এই Firebase account-টি disabled করা হয়েছে।"
-          );
-          break;
-
-        case "auth/network-request-failed":
-          setLoginError(
-            "Internet connection সমস্যা হয়েছে। আবার চেষ্টা করুন।"
-          );
-          break;
-
-        case "auth/operation-not-allowed":
-          setLoginError(
-            "Firebase Console-এ Email/Password Authentication চালু নেই।"
-          );
-          break;
-
-        default:
-          setLoginError(
-            error?.message || "Login failed। আবার চেষ্টা করুন।"
-          );
-      }
+      console.error("Login error:", error);
+      setLoginError(getFirebaseErrorMessage(error));
+    } finally {
+      setLoginLoading(false);
     }
   };
 
-  // =========================
-  // RESET PRODUCT FORM
-  // =========================
-
-  const resetForm = () => {
-    setEditingId(null);
-
-    setForm({
-      name: "",
-      category: "Men's Wear",
-      price: "",
-      oldPrice: "",
-      stock: "10",
-      image: "",
-      description: "",
-      featured: false,
-      bestSeller: false,
-      newArrival: true,
-    });
+  /*
+   * Logout
+   */
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
   };
 
-  // =========================
-  // SAVE PRODUCT
-  // =========================
+  /*
+   * Open add product form
+   */
+  const openAddProduct = () => {
+    setEditingProduct(null);
+    setProductForm(emptyProduct);
+    setProductError("");
+    setShowProductForm(true);
+  };
 
-  const saveProduct = async (e: FormEvent) => {
+  /*
+   * Open edit product form
+   */
+  const openEditProduct = (product: Product) => {
+    setEditingProduct(product);
+    setProductForm({
+      name: product.name || "",
+      price: String(product.price ?? ""),
+      image: product.image || "",
+      category: product.category || "",
+      description: product.description || "",
+      stock: String(product.stock ?? 0),
+    });
+
+    setProductError("");
+    setShowProductForm(true);
+  };
+
+  /*
+   * Save product
+   */
+  const saveProduct = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!form.name.trim() || !form.image.trim() || !form.price) {
-      alert("Name, image এবং price দিন।");
+    setProductError("");
+
+    const name = productForm.name.trim();
+    const price = Number(productForm.price);
+    const stock = Number(productForm.stock);
+
+    if (!name) {
+      setProductError("Product name দিন।");
       return;
     }
 
-    setSaving(true);
+    if (!productForm.price || Number.isNaN(price) || price < 0) {
+      setProductError("Valid price দিন।");
+      return;
+    }
+
+    if (
+      productForm.stock === "" ||
+      Number.isNaN(stock) ||
+      stock < 0
+    ) {
+      setProductError("Valid stock দিন।");
+      return;
+    }
+
+    setProductSaving(true);
 
     try {
-      const payload = {
-        name: form.name.trim(),
-        category: form.category,
-        price: Number(form.price),
-        oldPrice: form.oldPrice
-          ? Number(form.oldPrice)
-          : null,
-        stock: Math.max(0, Number(form.stock || 0)),
-        image: form.image.trim(),
-        description: form.description.trim(),
-        featured: form.featured,
-        bestSeller: form.bestSeller,
-        newArrival: form.newArrival,
-        rating: 4.8,
-        updatedAt: serverTimestamp(),
+      const productData = {
+        name,
+        price,
+        image: productForm.image.trim(),
+        category: productForm.category.trim(),
+        description: productForm.description.trim(),
+        stock,
       };
 
-      if (editingId) {
+      if (editingProduct) {
         await updateDoc(
-          doc(db, "products", editingId),
-          payload
+          doc(db, "products", editingProduct.id),
+          productData
         );
       } else {
-        await addDoc(
-          collection(db, "products"),
-          {
-            ...payload,
-            createdAt: serverTimestamp(),
-          }
-        );
+        await addDoc(collection(db, "products"), {
+          ...productData,
+          createdAt: serverTimestamp(),
+        });
       }
 
-      await loadData();
-      resetForm();
-
+      setShowProductForm(false);
+      setEditingProduct(null);
+      setProductForm(emptyProduct);
     } catch (error: any) {
       console.error("Save product error:", error);
-
-      alert(
-        error?.message || "Product save failed"
+      setProductError(
+        error?.message || "Product save করা যায়নি।"
       );
     } finally {
-      setSaving(false);
+      setProductSaving(false);
     }
   };
 
-  // =========================
-  // EDIT PRODUCT
-  // =========================
+  /*
+   * Delete product
+   */
+  const deleteProduct = async (product: Product) => {
+    const confirmed = window.confirm(
+      `"${product.name}" delete করতে চান?`
+    );
 
-  const editProduct = (p: Product) => {
-    setEditingId(p.id);
+    if (!confirmed) return;
 
-    setForm({
-      name: p.name || "",
-      category: p.category || "Men's Wear",
-      price: String(p.price ?? ""),
-      oldPrice: String(p.oldPrice ?? ""),
-      stock: String(p.stock ?? 0),
-      image: p.image || "",
-      description: p.description || "",
-      featured: !!p.featured,
-      bestSeller: !!p.bestSeller,
-      newArrival: !!p.newArrival,
-    });
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-  };
-
-  // =========================
-  // DELETE PRODUCT
-  // =========================
-
-  const removeProduct = async (id: string) => {
-    if (!confirm("Product delete করবেন?")) {
-      return;
-    }
+    setActionLoading(product.id);
 
     try {
-      await deleteDoc(
-        doc(db, "products", id)
-      );
-
-      await loadData();
-
-    } catch (error: any) {
+      await deleteDoc(doc(db, "products", product.id));
+    } catch (error) {
       console.error("Delete product error:", error);
-
-      alert(
-        error?.message || "Delete failed"
-      );
+      alert("Product delete করা যায়নি।");
+    } finally {
+      setActionLoading(null);
     }
   };
 
-  // =========================
-  // UPDATE ORDER STATUS
-  // =========================
-
-  const updateStatus = async (
-    order: Order,
+  /*
+   * Update order status
+   */
+  const updateOrderStatus = async (
+    orderId: string,
     status: string
   ) => {
-    try {
-      await updateDoc(
-        doc(db, "orders", order.id),
-        {
-          status,
-          updatedAt: serverTimestamp(),
-        }
-      );
-
-      await setDoc(
-        doc(db, "orderTracking", order.id),
-        {
-          status,
-          totalAmount: order.totalAmount || 0,
-          itemsSummary:
-            order.itemsSummary || "",
-          updatedAt: serverTimestamp(),
-        },
-        {
-          merge: true,
-        }
-      );
-
-      await loadData();
-
-    } catch (error: any) {
-      console.error(
-        "Status update error:",
-        error
-      );
-
-      alert(
-        error?.message ||
-          "Status update failed"
-      );
-    }
-  };
-
-  // =========================
-  // SEED PRODUCTS
-  // =========================
-
-  const seed = async () => {
-    if (
-      !confirm(
-        "Demo products database-এ add করবেন?"
-      )
-    ) {
-      return;
-    }
-
-    setSeeding(true);
+    setActionLoading(orderId);
 
     try {
-      await uploadDemoProducts();
-
-      await loadData();
-
-      alert("Demo products added.");
-
-    } catch (error: any) {
-      console.error(
-        "Seed products error:",
-        error
-      );
-
-      alert(
-        error?.message ||
-          "Seed failed"
-      );
-
+      await updateDoc(doc(db, "orders", orderId), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error("Order status update error:", error);
+      alert("Order status update করা যায়নি।");
     } finally {
-      setSeeding(false);
+      setActionLoading(null);
     }
   };
 
-  // =========================
-  // LOADING
-  // =========================
+  /*
+   * Dashboard stats
+   */
+  const stats = useMemo(() => {
+    const totalProducts = products.length;
 
-  if (loading) {
+    const totalOrders = orders.length;
+
+    const pendingOrders = orders.filter(
+      (order) =>
+        (order.status || "pending").toLowerCase() === "pending"
+    ).length;
+
+    const totalSales = orders.reduce(
+      (sum, order) => sum + Number(order.total || 0),
+      0
+    );
+
+    return {
+      totalProducts,
+      totalOrders,
+      pendingOrders,
+      totalSales,
+    };
+  }, [products, orders]);
+
+  /*
+   * Format date
+   */
+  const formatDate = (value: any) => {
+    if (!value) return "—";
+
+    try {
+      if (typeof value?.toDate === "function") {
+        return value.toDate().toLocaleString("en-BD");
+      }
+
+      return new Date(value).toLocaleString("en-BD");
+    } catch {
+      return "—";
+    }
+  };
+
+  /*
+   * Loading screen
+   */
+  if (authLoading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-slate-950 text-white">
-        Loading admin...
-      </div>
+      <main className="min-h-screen bg-slate-100 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-700 font-semibold">
+          <Loader2 className="w-6 h-6 animate-spin" />
+          Loading admin...
+        </div>
+      </main>
     );
   }
 
-  // =========================
-  // LOGIN SCREEN
-  // =========================
-
+  /*
+   * Login screen
+   */
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-950 grid place-items-center p-4">
-        <form
-          onSubmit={login}
-          className="w-full max-w-md bg-white rounded-3xl p-7 shadow-2xl"
-        >
-          <h1 className="text-2xl font-black">
-            Sohoj Life Admin
-          </h1>
+      <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4">
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-200 p-7">
+            <div className="text-center mb-7">
+              <div className="w-16 h-16 rounded-2xl bg-slate-950 text-amber-400 flex items-center justify-center mx-auto mb-4">
+                <LayoutDashboard className="w-8 h-8" />
+              </div>
 
-          <p className="text-sm text-slate-500 mt-1">
-            Secure dashboard login
-          </p>
+              <h1 className="text-2xl font-black text-slate-950">
+                Admin Login
+              </h1>
 
-          {loginError && (
-            <div className="mt-4 p-3 rounded-xl bg-rose-50 text-rose-600 text-sm">
-              {loginError}
+              <p className="text-sm text-slate-500 mt-2">
+                Sohoj Life Admin Dashboard
+              </p>
             </div>
-          )}
 
-          <div className="mt-6 space-y-3">
+            {loginError && (
+              <div className="mb-5 rounded-2xl bg-red-50 border border-red-200 text-red-700 px-4 py-3 flex gap-3 text-sm">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
 
-            <input
-              type="email"
-              required
-              value={loginEmail}
-              onChange={(e) =>
-                setLoginEmail(e.target.value)
-              }
-              placeholder="Admin email"
-              autoComplete="email"
-              className="w-full border rounded-xl px-4 py-3"
-            />
+            <form onSubmit={login} className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                  Email
+                </label>
 
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) =>
-                setPassword(e.target.value)
-              }
-              placeholder="Password"
-              autoComplete="current-password"
-              className="w-full border rounded-xl px-4 py-3"
-            />
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="admin@example.com"
+                  autoComplete="email"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                />
+              </div>
 
-            <button
-              type="submit"
-              className="w-full bg-slate-950 text-white rounded-xl py-3 font-black"
-            >
-              Login
-            </button>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                  Password
+                </label>
 
-            <button
-              type="button"
-              onClick={() => router.push("/")}
-              className="w-full border rounded-xl py-3 font-bold"
-            >
-              Back to Store
-            </button>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                />
+              </div>
 
+              <button
+                type="submit"
+                disabled={loginLoading}
+                className="w-full bg-slate-950 text-white rounded-2xl py-3.5 font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loginLoading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Logging in...
+                  </>
+                ) : (
+                  "Login"
+                )}
+              </button>
+            </form>
+
+            {ADMIN_EMAIL && (
+              <p className="text-xs text-slate-400 text-center mt-5">
+                Admin: {ADMIN_EMAIL}
+              </p>
+            )}
           </div>
-        </form>
-      </div>
+        </div>
+      </main>
     );
   }
 
-  // =========================
-  // DASHBOARD DATA
-  // =========================
-
-  const sales = orders.reduce(
-    (sum, o) =>
-      sum + Number(o.totalAmount || 0),
-    0
-  );
-
-  const pending = orders.filter(
-    (o) => o.status === "Pending"
-  ).length;
-
-  const lowStock = products.filter(
-    (p) => Number(p.stock ?? 0) <= 3
-  ).length;
-
-  // =========================
-  // ADMIN DASHBOARD
-  // =========================
-
+  /*
+   * Admin dashboard
+   */
   return (
-    <div className="min-h-screen bg-[#f6f7fb] text-slate-900">
+    <main className="min-h-screen bg-slate-100 text-slate-900">
+      {/* Header */}
+      <header className="bg-slate-950 text-white sticky top-0 z-40 shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center">
+              <LayoutDashboard className="w-6 h-6" />
+            </div>
 
-      {/* HEADER */}
+            <div>
+              <h1 className="font-black text-lg">
+                Sohoj Life Admin
+              </h1>
 
-      <header className="sticky top-0 z-30 bg-slate-950 text-white">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-
-          <div>
-            <b className="text-xl">
-              Sohoj{" "}
-              <span className="text-amber-400">
-                Life
-              </span>
-            </b>
-
-            <p className="text-[10px] text-slate-400">
-              Admin Dashboard
-            </p>
+              <p className="text-xs text-slate-400">
+                {user.email}
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-
-            <button
-              onClick={() => router.push("/")}
-              className="px-3 py-2 rounded-xl bg-white/10 text-sm"
-            >
-              <ArrowLeft className="inline w-4 h-4 mr-1" />
-              Store
-            </button>
-
-            <button
-              onClick={() => signOut(auth)}
-              className="px-3 py-2 rounded-xl bg-rose-500 text-sm"
-            >
-              <LogOut className="inline w-4 h-4 mr-1" />
-              Logout
-            </button>
-
-          </div>
+          <button
+            onClick={logout}
+            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 flex items-center gap-2 font-bold text-sm"
+          >
+            <LogOut className="w-4 h-4" />
+            Logout
+          </button>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
-
-        {/* TABS */}
-
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-7">
+        {/* Tabs */}
         <div className="flex gap-2 overflow-x-auto mb-6">
-
           {(
             [
               ["dashboard", "Dashboard"],
@@ -661,388 +627,655 @@ export default function AdminPage() {
               className={`px-5 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${
                 tab === id
                   ? "bg-slate-950 text-amber-400"
-                  : "bg-white border"
+                  : "bg-white border border-slate-200 text-slate-700"
               }`}
             >
               {label}
             </button>
           ))}
-
         </div>
 
-        {/* =========================
-            DASHBOARD TAB
-        ========================= */}
-
+        {/* Dashboard */}
         {tab === "dashboard" && (
-          <>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-
-              {[
-                ["Products", products.length, Box],
-                ["Orders", orders.length, Package],
-                [
-                  "Sales",
-                  `৳${sales.toLocaleString("en-BD")}`,
-                  BarChart3,
-                ],
-                ["Low Stock", lowStock, Truck],
-              ].map(
-                ([label, value, Icon]: any) => (
-                  <div
-                    key={label}
-                    className="bg-white rounded-2xl border p-5 shadow-sm"
-                  >
-                    <Icon className="w-5 h-5 text-amber-500" />
-
-                    <p className="text-xs text-slate-500 mt-4">
-                      {label}
+          <section>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-500">
+                      Products
                     </p>
-
-                    <p className="text-2xl font-black mt-1">
-                      {value}
+                    <p className="text-3xl font-black mt-1">
+                      {stats.totalProducts}
                     </p>
                   </div>
-                )
-              )}
 
-            </div>
-
-            <div className="mt-6 bg-white border rounded-2xl p-6">
-
-              <div className="flex items-center justify-between">
-
-                <div>
-                  <h2 className="font-black text-xl">
-                    Quick Actions
-                  </h2>
-
-                  <p className="text-sm text-slate-500 mt-1">
-                    Store manage করার shortcut
-                  </p>
+                  <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <Package className="w-6 h-6" />
+                  </div>
                 </div>
-
-                <button
-                  onClick={loadData}
-                  className="p-2 border rounded-xl"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-3 mt-5">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-500">
+                      Orders
+                    </p>
+                    <p className="text-3xl font-black mt-1">
+                      {stats.totalOrders}
+                    </p>
+                  </div>
 
-                <button
-                  onClick={() =>
-                    setTab("products")
-                  }
-                  className="p-4 rounded-xl bg-slate-50 text-left font-bold"
-                >
-                  ➕ Add / Edit Products
-                </button>
+                  <div className="w-12 h-12 rounded-xl bg-green-50 text-green-600 flex items-center justify-center">
+                    <ShoppingBag className="w-6 h-6" />
+                  </div>
+                </div>
+              </div>
 
-                <button
-                  onClick={() =>
-                    setTab("orders")
-                  }
-                  className="p-4 rounded-xl bg-slate-50 text-left font-bold"
-                >
-                  📦 Manage Orders ({pending} pending)
-                </button>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-500">
+                      Pending
+                    </p>
+                    <p className="text-3xl font-black mt-1">
+                      {stats.pendingOrders}
+                    </p>
+                  </div>
 
-                <button
-                  disabled={seeding}
-                  onClick={seed}
-                  className="p-4 rounded-xl bg-amber-50 text-left font-bold disabled:opacity-50"
-                >
-                  {seeding
-                    ? "Adding..."
-                    : "🌱 Add 40 Demo Products"}
-                </button>
+                  <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <RefreshCw className="w-6 h-6" />
+                  </div>
+                </div>
+              </div>
 
-                <Link
-                  href="/"
-                  className="p-4 rounded-xl bg-slate-50 font-bold"
-                >
-                  🏪 Open Store
-                </Link>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-500">
+                      Total Sales
+                    </p>
 
+                    <p className="text-3xl font-black mt-1">
+                      ৳{stats.totalSales.toLocaleString("en-BD")}
+                    </p>
+                  </div>
+
+                  <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center">
+                    <span className="font-black text-xl">
+                      ৳
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-          </>
+
+            <div className="mt-6 bg-white border border-slate-200 rounded-2xl p-6">
+              <h2 className="text-xl font-black mb-2">
+                Welcome to Admin Dashboard
+              </h2>
+
+              <p className="text-slate-500">
+                এখান থেকে Products এবং Orders manage করতে পারবেন।
+              </p>
+            </div>
+          </section>
         )}
 
-        {/* =========================
-            PRODUCTS TAB
-        ========================= */}
-
+        {/* Products */}
         {tab === "products" && (
-          <div className="grid lg:grid-cols-[380px_1fr] gap-6">
+          <section>
+            <div className="flex items-center justify-between gap-4 mb-5">
+              <div>
+                <h2 className="text-2xl font-black">
+                  Products
+                </h2>
 
-            <form
-              onSubmit={saveProduct}
-              className="bg-white border rounded-2xl p-5 h-fit space-y-3"
-            >
+                <p className="text-sm text-slate-500 mt-1">
+                  আপনার products manage করুন।
+                </p>
+              </div>
 
-              <div className="flex justify-between">
+              <button
+                onClick={openAddProduct}
+                className="bg-slate-950 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2"
+              >
+                <Plus className="w-5 h-5" />
+                Add Product
+              </button>
+            </div>
 
-                <h2 className="font-black text-xl">
-                  {editingId
+            {dataLoading ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 flex justify-center">
+                <Loader2 className="w-7 h-7 animate-spin" />
+              </div>
+            ) : products.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+                <Package className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+
+                <p className="font-bold text-slate-700">
+                  কোনো product পাওয়া যায়নি।
+                </p>
+
+                <p className="text-sm text-slate-400 mt-1">
+                  Add Product button থেকে প্রথম product যোগ করুন।
+                </p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[800px]">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th className="text-left px-5 py-4 text-sm font-black">
+                          Product
+                        </th>
+
+                        <th className="text-left px-5 py-4 text-sm font-black">
+                          Category
+                        </th>
+
+                        <th className="text-left px-5 py-4 text-sm font-black">
+                          Price
+                        </th>
+
+                        <th className="text-left px-5 py-4 text-sm font-black">
+                          Stock
+                        </th>
+
+                        <th className="text-right px-5 py-4 text-sm font-black">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {products.map((product) => (
+                        <tr
+                          key={product.id}
+                          className="border-b border-slate-100 last:border-b-0"
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              {product.image ? (
+                                <img
+                                  src={product.image}
+                                  alt={product.name}
+                                  className="w-12 h-12 rounded-xl object-cover border"
+                                />
+                              ) : (
+                                <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center">
+                                  <Package className="w-5 h-5 text-slate-400" />
+                                </div>
+                              )}
+
+                              <div>
+                                <p className="font-bold">
+                                  {product.name}
+                                </p>
+
+                                {product.description && (
+                                  <p className="text-xs text-slate-400 max-w-xs truncate">
+                                    {product.description}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4 text-sm text-slate-600">
+                            {product.category || "—"}
+                          </td>
+
+                          <td className="px-5 py-4 font-bold">
+                            ৳
+                            {Number(
+                              product.price || 0
+                            ).toLocaleString("en-BD")}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <span
+                              className={`inline-flex px-3 py-1 rounded-full text-xs font-bold ${
+                                Number(product.stock || 0) > 0
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-red-50 text-red-700"
+                              }`}
+                            >
+                              {product.stock ?? 0}
+                            </span>
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() =>
+                                  openEditProduct(product)
+                                }
+                                className="p-2.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                title="Edit"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  deleteProduct(product)
+                                }
+                                disabled={
+                                  actionLoading === product.id
+                                }
+                                className="p-2.5 rounded-xl bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                title="Delete"
+                              >
+                                {actionLoading === product.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-4 h-4" />
+                                )}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Orders */}
+        {tab === "orders" && (
+          <section>
+            <div className="mb-5">
+              <h2 className="text-2xl font-black">
+                Orders
+              </h2>
+
+              <p className="text-sm text-slate-500 mt-1">
+                Customer orders এবং status manage করুন।
+              </p>
+            </div>
+
+            {orders.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+                <ShoppingBag className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+
+                <p className="font-bold text-slate-700">
+                  কোনো order পাওয়া যায়নি।
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {orders.map((order) => {
+                  const currentStatus =
+                    order.status || "pending";
+
+                  return (
+                    <div
+                      key={order.id}
+                      className="bg-white rounded-2xl border border-slate-200 p-5"
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h3 className="font-black text-lg">
+                              Order #{order.id.slice(0, 8)}
+                            </h3>
+
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                currentStatus === "pending"
+                                  ? "bg-amber-50 text-amber-700"
+                                  : currentStatus === "confirmed"
+                                  ? "bg-blue-50 text-blue-700"
+                                  : currentStatus === "shipped"
+                                  ? "bg-purple-50 text-purple-700"
+                                  : currentStatus === "delivered"
+                                  ? "bg-green-50 text-green-700"
+                                  : currentStatus === "cancelled"
+                                  ? "bg-red-50 text-red-700"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              {currentStatus}
+                            </span>
+                          </div>
+
+                          <div className="mt-4 space-y-1 text-sm text-slate-600">
+                            {order.customerName && (
+                              <p>
+                                <strong>Name:</strong>{" "}
+                                {order.customerName}
+                              </p>
+                            )}
+
+                            {order.customerEmail && (
+                              <p>
+                                <strong>Email:</strong>{" "}
+                                {order.customerEmail}
+                              </p>
+                            )}
+
+                            {order.phone && (
+                              <p>
+                                <strong>Phone:</strong>{" "}
+                                {order.phone}
+                              </p>
+                            )}
+
+                            {order.address && (
+                              <p>
+                                <strong>Address:</strong>{" "}
+                                {order.address}
+                              </p>
+                            )}
+
+                            <p>
+                              <strong>Date:</strong>{" "}
+                              {formatDate(order.createdAt)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="lg:text-right">
+                          <p className="text-sm text-slate-500">
+                            Total
+                          </p>
+
+                          <p className="text-2xl font-black">
+                            ৳
+                            {Number(
+                              order.total || 0
+                            ).toLocaleString("en-BD")}
+                          </p>
+
+                          <select
+                            value={currentStatus}
+                            onChange={(e) =>
+                              updateOrderStatus(
+                                order.id,
+                                e.target.value
+                              )
+                            }
+                            disabled={
+                              actionLoading === order.id
+                            }
+                            className="mt-3 border border-slate-300 rounded-xl px-3 py-2 text-sm font-semibold outline-none"
+                          >
+                            <option value="pending">
+                              Pending
+                            </option>
+
+                            <option value="confirmed">
+                              Confirmed
+                            </option>
+
+                            <option value="processing">
+                              Processing
+                            </option>
+
+                            <option value="shipped">
+                              Shipped
+                            </option>
+
+                            <option value="delivered">
+                              Delivered
+                            </option>
+
+                            <option value="cancelled">
+                              Cancelled
+                            </option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {Array.isArray(order.items) &&
+                        order.items.length > 0 && (
+                          <div className="mt-5 pt-5 border-t border-slate-100">
+                            <h4 className="font-bold mb-3">
+                              Items
+                            </h4>
+
+                            <div className="space-y-2">
+                              {order.items.map(
+                                (item: any, index: number) => (
+                                  <div
+                                    key={`${order.id}-${index}`}
+                                    className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 text-sm"
+                                  >
+                                    <div>
+                                      <p className="font-semibold">
+                                        {item.name ||
+                                          item.title ||
+                                          "Product"}
+                                      </p>
+
+                                      <p className="text-xs text-slate-500">
+                                        Qty:{" "}
+                                        {item.quantity ||
+                                          item.qty ||
+                                          1}
+                                      </p>
+                                    </div>
+
+                                    <p className="font-bold">
+                                      ৳
+                                      {Number(
+                                        item.price || 0
+                                      ).toLocaleString("en-BD")}
+                                    </p>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
+      {/* Product Modal */}
+      {showProductForm && (
+        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+          <div className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl">
+            <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black">
+                  {editingProduct
                     ? "Edit Product"
                     : "Add Product"}
                 </h2>
 
-                {editingId && (
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="text-xs text-rose-500"
-                  >
-                    Cancel
-                  </button>
-                )}
-
+                <p className="text-xs text-slate-500 mt-1">
+                  Product information দিন।
+                </p>
               </div>
-
-              {[
-                ["name", "Product name", "text"],
-                ["price", "Price", "number"],
-                ["oldPrice", "Old price", "number"],
-                ["stock", "Stock", "number"],
-                ["image", "Image URL", "url"],
-              ].map(
-                ([key, label, type]) => (
-                  <input
-                    key={key}
-                    required={key !== "oldPrice"}
-                    type={type}
-                    value={(form as any)[key]}
-                    onChange={(e) =>
-                      setForm((x) => ({
-                        ...x,
-                        [key]: e.target.value,
-                      }))
-                    }
-                    placeholder={label}
-                    className="w-full border rounded-xl px-3 py-2.5 text-sm"
-                  />
-                )
-              )}
-
-              <select
-                value={form.category}
-                onChange={(e) =>
-                  setForm((x) => ({
-                    ...x,
-                    category: e.target.value,
-                  }))
-                }
-                className="w-full border rounded-xl px-3 py-2.5 text-sm"
-              >
-                <option>Men's Wear</option>
-                <option>Women's Wear</option>
-                <option>Kids' Wear</option>
-                <option>Accessories</option>
-              </select>
-
-              <textarea
-                value={form.description}
-                onChange={(e) =>
-                  setForm((x) => ({
-                    ...x,
-                    description: e.target.value,
-                  }))
-                }
-                rows={4}
-                placeholder="Description"
-                className="w-full border rounded-xl px-3 py-2.5 text-sm"
-              />
-
-              {[
-                ["featured", "Featured"],
-                ["bestSeller", "Best Seller"],
-                ["newArrival", "New Arrival"],
-              ].map(([key, label]) => (
-                <label
-                  key={key}
-                  className="flex items-center gap-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={(form as any)[key]}
-                    onChange={(e) =>
-                      setForm((x) => ({
-                        ...x,
-                        [key]: e.target.checked,
-                      }))
-                    }
-                  />
-
-                  {label}
-                </label>
-              ))}
 
               <button
-                disabled={saving}
-                className="w-full bg-slate-950 text-white py-3 rounded-xl font-black disabled:opacity-50"
+                onClick={() => {
+                  setShowProductForm(false);
+                  setEditingProduct(null);
+                  setProductError("");
+                }}
+                className="p-2 rounded-xl hover:bg-slate-100"
               >
-                {saving
-                  ? "Saving..."
-                  : editingId
-                  ? "Update Product"
-                  : "Save Product"}
+                <X className="w-5 h-5" />
               </button>
-
-            </form>
-
-            <div className="space-y-3">
-
-              {products.map((p) => (
-                <div
-                  key={p.id}
-                  className="bg-white border rounded-2xl p-4 flex gap-4 items-center"
-                >
-
-                  <img
-                    src={p.image}
-                    alt={p.name}
-                    className="w-20 h-20 rounded-xl object-cover"
-                  />
-
-                  <div className="flex-1 min-w-0">
-
-                    <h3 className="font-black truncate">
-                      {p.name}
-                    </h3>
-
-                    <p className="text-xs text-slate-500 mt-1">
-                      {p.category} · ৳{p.price} · Stock{" "}
-                      {p.stock ?? 0}
-                    </p>
-
-                  </div>
-
-                  <button
-                    onClick={() =>
-                      editProduct(p)
-                    }
-                    className="p-2 rounded-xl bg-slate-100"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      removeProduct(p.id)
-                    }
-                    className="p-2 rounded-xl bg-rose-50 text-rose-600"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-
-                </div>
-              ))}
-
             </div>
-          </div>
-        )}
 
-        {/* =========================
-            ORDERS TAB
-        ========================= */}
-
-        {tab === "orders" && (
-          <div className="space-y-3">
-
-            {orders.length === 0 ? (
-              <div className="bg-white border rounded-2xl p-10 text-center text-slate-500">
-                No orders yet.
-              </div>
-            ) : (
-              orders.map((o) => (
-                <div
-                  key={o.id}
-                  className="bg-white border rounded-2xl p-5"
-                >
-
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-
-                    <div>
-
-                      <p className="font-mono text-xs text-slate-400">
-                        #{o.id}
-                      </p>
-
-                      <h3 className="font-black mt-1">
-                        {o.customerName || "Customer"}
-                      </h3>
-
-                      <p className="text-sm text-slate-500">
-                        {o.phone} · {o.address}
-                      </p>
-
-                      <p className="text-xs text-slate-400 mt-2">
-                        {o.itemsSummary || "Items"}
-                      </p>
-
-                    </div>
-
-                    <div className="flex items-center gap-3">
-
-                      <b className="text-amber-600">
-                        ৳
-                        {Number(
-                          o.totalAmount || 0
-                        ).toLocaleString("en-BD")}
-                      </b>
-
-                      <select
-                        value={
-                          o.status || "Pending"
-                        }
-                        onChange={(e) =>
-                          updateStatus(
-                            o,
-                            e.target.value
-                          )
-                        }
-                        className="border rounded-xl px-3 py-2 text-sm"
-                      >
-                        <option>
-                          Pending
-                        </option>
-
-                        <option>
-                          Processing
-                        </option>
-
-                        <option>
-                          Shipped
-                        </option>
-
-                        <option>
-                          Delivered
-                        </option>
-
-                        <option>
-                          Cancelled
-                        </option>
-                      </select>
-
-                    </div>
-
-                  </div>
-
+            <form
+              onSubmit={saveProduct}
+              className="p-6 space-y-5"
+            >
+              {productError && (
+                <div className="rounded-2xl bg-red-50 border border-red-200 text-red-700 px-4 py-3 flex gap-3 text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{productError}</span>
                 </div>
-              ))
-            )}
+              )}
 
+              <div>
+                <label className="block text-sm font-bold mb-2">
+                  Product Name *
+                </label>
+
+                <input
+                  value={productForm.name}
+                  onChange={(e) =>
+                    setProductForm((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                    }))
+                  }
+                  placeholder="Product name"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold mb-2">
+                    Price *
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={productForm.price}
+                    onChange={(e) =>
+                      setProductForm((prev) => ({
+                        ...prev,
+                        price: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold mb-2">
+                    Stock
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={productForm.stock}
+                    onChange={(e) =>
+                      setProductForm((prev) => ({
+                        ...prev,
+                        stock: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">
+                  Category
+                </label>
+
+                <input
+                  value={productForm.category}
+                  onChange={(e) =>
+                    setProductForm((prev) => ({
+                      ...prev,
+                      category: e.target.value,
+                    }))
+                  }
+                  placeholder="Category"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">
+                  Image URL
+                </label>
+
+                <input
+                  type="url"
+                  value={productForm.image}
+                  onChange={(e) =>
+                    setProductForm((prev) => ({
+                      ...prev,
+                      image: e.target.value,
+                    }))
+                  }
+                  placeholder="https://..."
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold mb-2">
+                  Description
+                </label>
+
+                <textarea
+                  value={productForm.description}
+                  onChange={(e) =>
+                    setProductForm((prev) => ({
+                      ...prev,
+                      description: e.target.value,
+                    }))
+                  }
+                  placeholder="Product description"
+                  rows={4}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-950 resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProductForm(false);
+                    setEditingProduct(null);
+                    setProductError("");
+                  }}
+                  className="px-5 py-3 rounded-xl border border-slate-300 font-bold"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={productSaving}
+                  className="px-5 py-3 rounded-xl bg-slate-950 text-white font-bold flex items-center gap-2 disabled:opacity-60"
+                >
+                  {productSaving ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-5 h-5" />
+                      {editingProduct
+                        ? "Update Product"
+                        : "Save Product"}
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
-        )}
-
-      </main>
-    </div>
+        </div>
+      )}
+    </main>
   );
 }
-```
